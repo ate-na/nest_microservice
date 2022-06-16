@@ -1,0 +1,101 @@
+    const { panel, bundle } = data;
+
+    const array = [];
+    const temp = [];
+    const Error = [];
+    let directory;
+    let dup;
+    const dir = join(process.env.DIR, 'bundles', bundle._id);
+    bundle.products = bundle.products.map((ele) => {
+      ele.frame = [1, 12, 2, 3, 4, 5, 6, 7, 8, 9, 0, 11];
+      ele.status = 'success';
+      ele.errors = [];
+      return ele;
+    });
+    bundle.status = 'PROCESS';
+    for (let i = 0; i < bundle.products.length; i++) {
+      const element = bundle.products[i];
+      const data = await this.httpService
+        .get(`https://dev.api.3dily.com/scene/${panel}/${element.code}/data`)
+        .toPromise();
+      const layers = data.data.layers;
+      for (let x = 0; x < element.variants.length; x++) {
+        const el = element.variants[x];
+        const { galleryIndex, error } = this.varients(layers, el);
+        console.log(galleryIndex);
+        console.log('error', error);
+        if (error) Error.push(error);
+        temp.push({
+          id: element._id,
+          path: `${galleryIndex}`,
+          code: element.code,
+        });
+        dup = await this.Dupilcate(temp);
+        const findIndx = dup.find((e) => e.id === element._id);
+        if (findIndx) {
+          element.frame.map((el_frame) => {
+            array.push({
+              ...element,
+              frame: el_frame,
+              variants: el,
+              id: element._id,
+              path: join(`${element.code}`, `${findIndx.path}`, `${el_frame}`),
+            });
+          });
+        }
+      }
+    }
+    this.x = array[0].path;
+    for (let j = 0; j < array.length; j++) {
+      try {
+        const url = `https://dev.api.3dily.com/scene/${panel}/${
+          array[j]?.code
+        }/image?shadow=${!!array[j]?.shadow}${
+          array[j]?.frame ? `&frame=${array[j]?.frame}` : ''
+        }&type=png${array[j]?.quality ? `&quality=${array[j]?.quality}` : ''}${
+          array[j]?.size ? `&size=${array[j]?.size}` : ''
+        }${array[j]?.crop ? `&crop=${array[j]?.crop}` : ''}${
+          array[j]?.background ? `&background=${array[j]?.background}` : ''
+        }${
+          array[j]?.variants
+            ? `&variants=${JSON.stringify(array[j]?.variants)}`
+            : ''
+        }`;
+        const x = await this.httpService
+          .get(url, { method: 'get', responseType: 'stream' })
+          .toPromise();
+        directory = join(dir, array[j].path);
+        if (!existsSync(directory)) {
+          console.log();
+          mkdirSync(directory, { recursive: true });
+        }
+        x.data.pipe(createWriteStream(join(directory, 'x.png')));
+      } catch (error) {
+        console.log('Errror', error);
+        Error.push({ message: error.message, id: array[j].id });
+        if (existsSync(directory)) {
+          rmSync(directory, { recursive: true, force: true });
+        }
+        bundle.products = bundle.products.map((el) => {
+          if (el._id === array[j].id) {
+            el.status = 'Failed';
+          }
+          return el;
+        });
+      }
+    }
+    this.errorHandleings(Error);
+
+    bundle.products = bundle.products.map((el) => {
+      Error.map((element) => {
+        if (element.id === el._id) {
+          el.errors.push(element.message);
+        }
+      });
+      if (el.status !== 'Failed') el.status = 'Done';
+      return el;
+    });
+
+    this.zipFile(dir, bundle._id);
+    bundle.status = 'Done';
+    console.log('bundle', bundle);
